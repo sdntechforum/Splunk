@@ -236,6 +236,16 @@ class BaseTool(ABC):
                 service = splunk_ctx.get("service", None)
 
         if not is_connected or not service:
+            # Final fallback: try fresh connection from env (handles worker/process isolation)
+            try:
+                from src.client.splunk_client import get_splunk_service_safe
+
+                service = get_splunk_service_safe(None)
+                if service:
+                    return True, service, ""
+            except Exception:
+                pass
+
             return (
                 False,
                 None,
@@ -251,15 +261,27 @@ class BaseTool(ABC):
         Returns:
             SplunkContext object, dict, or None
         """
+        # Prefer server._splunk_context when it has a valid connection (HTTP mode loads at startup)
         try:
-            # Try lifespan context first (traditional path)
+            from fastmcp.server.dependencies import get_server
+
+            server = get_server()
+            if hasattr(server, "_splunk_context"):
+                sctx = server._splunk_context
+                if sctx and getattr(sctx, "is_connected", False) and getattr(sctx, "service", None):
+                    return sctx
+        except Exception:
+            pass
+
+        try:
+            # Try lifespan context (traditional path)
             if hasattr(ctx.request_context, "lifespan_context"):
                 return ctx.request_context.lifespan_context
         except Exception:
             pass
 
         try:
-            # Fallback: try to get from server instance (module initialization path)
+            # Fallback: server instance (may have connection from startup)
             from fastmcp.server.dependencies import get_server
 
             server = get_server()
